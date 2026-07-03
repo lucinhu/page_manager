@@ -58,6 +58,9 @@ typedef struct pm_event_node_t {
   int event_id;
   size_t data_len;
   uint8_t *data;
+  pm_event_data_release_cb_t release_cb;
+  void *release_user_data;
+  bool owns_data;
   bool broadcast;
   struct pm_event_node_t *next;
 } pm_event_node_t;
@@ -114,10 +117,22 @@ static void event_queue_push(pm_atomic_event_ptr *head, pm_event_node_t *node) {
 static void event_node_free_chain(pm_event_node_t *node) {
   while (node) {
     pm_event_node_t *next = node->next;
-    pm_free(node->data);
+    if (node->release_cb)
+      node->release_cb(node->data, node->release_user_data);
+    else if (node->owns_data)
+      pm_free(node->data);
     pm_free(node);
     node = next;
   }
+}
+
+static void event_node_release_data(pm_event_node_t *node) {
+  if (!node)
+    return;
+  if (node->release_cb)
+    node->release_cb(node->data, node->release_user_data);
+  else if (node->owns_data)
+    pm_free(node->data);
 }
 
 static pm_event_node_t *event_node_create(int event_id, const void *data,
@@ -138,7 +153,26 @@ static pm_event_node_t *event_node_create(int event_id, const void *data,
       return NULL;
     }
     memcpy(node->data, data, data_len);
+    node->owns_data = true;
   }
+
+  return node;
+}
+
+static pm_event_node_t *event_node_create_fast(
+    int event_id, void *data, size_t data_len, bool broadcast,
+    pm_event_data_release_cb_t release_cb, void *release_user_data) {
+  pm_event_node_t *node = (pm_event_node_t *)pm_alloc(sizeof(pm_event_node_t));
+  if (!node)
+    return NULL;
+
+  memset(node, 0, sizeof(pm_event_node_t));
+  node->event_id = event_id;
+  node->data_len = data_len;
+  node->data = (uint8_t *)data;
+  node->release_cb = release_cb;
+  node->release_user_data = release_user_data;
+  node->broadcast = broadcast;
 
   return node;
 }
@@ -569,7 +603,7 @@ int pm_dispatch_events(pm_t *pm) {
     if (pm->event_preprocessor &&
         pm->event_preprocessor(node->event_id, node->data, node->data_len,
                                pm->event_preprocessor_ud)) {
-      pm_free(node->data);
+      event_node_release_data(node);
       pm_free(node);
       node = next;
       dispatched++;
@@ -605,7 +639,7 @@ int pm_dispatch_events(pm_t *pm) {
         top->callbacks.on_event(
           top->root, node->event_id, node->data, node->data_len, top->user_data);
     }
-    pm_free(node->data);
+    event_node_release_data(node);
     pm_free(node);
     node = next;
     dispatched++;
@@ -683,6 +717,23 @@ void pm_send_event(pm_t *pm, int event_id, const void *data, size_t data_len) {
   }
 
   event_queue_push(&pm->event_head, node);
+}
+
+bool pm_send_event_fast(pm_t *pm, int event_id, void *data, size_t data_len,
+                        pm_event_data_release_cb_t release_cb,
+                        void *release_user_data) {
+  if (!pm || (data_len > 0 && !data))
+    return false;
+
+  pm_event_node_t *node = event_node_create_fast(
+      event_id, data, data_len, false, release_cb, release_user_data);
+  if (!node) {
+    PM_LOGE(TAG, "post_event_fast: alloc failed");
+    return false;
+  }
+
+  event_queue_push(&pm->event_head, node);
+  return true;
 }
 
 void pm_on_action(pm_t *pm, pm_action_cb_t handler,

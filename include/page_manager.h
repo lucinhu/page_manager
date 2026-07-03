@@ -284,6 +284,28 @@ void pm_broadcast_event(pm_t *pm, int event_id, const void *data, size_t data_le
 void pm_send_event(pm_t *pm, int event_id, const void *data, size_t data_len);
 
 /**
+ * Optional callback for pm_send_event_fast().
+ * Called on the LVGL thread after the event has been dispatched or dropped.
+ */
+typedef void (*pm_event_data_release_cb_t)(void *data, void *user_data);
+
+/**
+ * Post an event without copying its data payload.
+ *
+ * This is intended for large transient payloads such as camera frames. The data
+ * pointer is passed directly to page callbacks, so the caller must keep it valid
+ * until release_cb is called. If release_cb is non-NULL, ownership is normally
+ * transferred to the page manager.
+ *
+ * Safe to call from any thread. No LVGL lock needed.
+ *
+ * @return true if the event was queued, false on allocation/argument failure.
+ */
+bool pm_send_event_fast(pm_t *pm, int event_id, void *data, size_t data_len,
+                        pm_event_data_release_cb_t release_cb,
+                        void *release_user_data);
+
+/**
  * Dispatch queued events immediately on the current thread.
  *
  * Must be called on the LVGL thread or while holding the LVGL lock. This is
