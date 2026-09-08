@@ -48,6 +48,7 @@ typedef struct pm_page_t {
   bool visible;
   bool keep_alive;
   bool is_instance;
+  bool refresh_pending;
   pm_page_t *template_page;
   lv_obj_t *root;
   uint8_t *nav_data;
@@ -321,7 +322,7 @@ static void page_anim_opa_start(pm_page_t *page, lv_opa_t from, lv_opa_t to,
   lv_anim_start(&a);
 }
 
-static void page_do_destroy(pm_page_t *page) {
+static void page_do_destroy_internal(pm_page_t *page, bool clear_nav_data) {
   if (!page || !page->created) return;
   if (page->visible && page->callbacks.on_hide && page->root)
     page->callbacks.on_hide(page->root, page->user_data);
@@ -331,11 +332,17 @@ static void page_do_destroy(pm_page_t *page) {
     lv_obj_del(page->root);
     page->root = NULL;
   }
-  pm_free(page->nav_data);
-  page->nav_data = NULL;
-  page->nav_data_len = 0;
+  if (clear_nav_data) {
+    pm_free(page->nav_data);
+    page->nav_data = NULL;
+    page->nav_data_len = 0;
+  }
   page->created = false;
   page->visible = false;
+}
+
+static void page_do_destroy(pm_page_t *page) {
+  page_do_destroy_internal(page, true);
 }
 
 static void page_do_destroy_and_release(pm_page_t *page) {
@@ -773,6 +780,63 @@ void pm_page_set_keep_alive(pm_page_t *page, bool enable) {
 
 bool pm_page_get_keep_alive(pm_page_t *page) {
   return page ? page->keep_alive : false;
+}
+
+static void page_mark_for_refresh(pm_page_t *page) {
+  if (page != NULL && page->created)
+    page->refresh_pending = true;
+}
+
+static void page_refresh_if_marked(pm_t *pm, pm_page_t *page) {
+  if (page == NULL || !page->refresh_pending)
+    return;
+  page->refresh_pending = false;
+  page_do_create(pm, page);
+}
+
+void pm_refresh_pages(pm_t *pm) {
+  int index;
+  if (pm == NULL)
+    return;
+  pm_transition_cancel(pm);
+  for (index = 0; index < pm->reg_count; ++index)
+    page_mark_for_refresh(pm->registered[index]);
+  for (index = 0; index < pm->stack_depth; ++index) {
+    if (pm->stack[index] != NULL && pm->stack[index]->is_instance)
+      page_mark_for_refresh(pm->stack[index]);
+  }
+  for (index = 0; index < pm->overlay_depth; ++index) {
+    if (pm->overlays[index] != NULL && pm->overlays[index]->is_instance)
+      page_mark_for_refresh(pm->overlays[index]);
+  }
+  for (index = 0; index < pm->reg_count; ++index) {
+    if (pm->registered[index]->refresh_pending)
+      page_do_destroy_internal(pm->registered[index], false);
+  }
+  for (index = 0; index < pm->stack_depth; ++index) {
+    pm_page_t *page = pm->stack[index];
+    if (page != NULL && page->is_instance && page->refresh_pending)
+      page_do_destroy_internal(page, false);
+  }
+  for (index = 0; index < pm->overlay_depth; ++index) {
+    pm_page_t *page = pm->overlays[index];
+    if (page != NULL && page->is_instance && page->refresh_pending)
+      page_do_destroy_internal(page, false);
+  }
+  for (index = 0; index < pm->reg_count; ++index)
+    page_refresh_if_marked(pm, pm->registered[index]);
+  for (index = 0; index < pm->stack_depth; ++index) {
+    if (pm->stack[index] != NULL && pm->stack[index]->is_instance)
+      page_refresh_if_marked(pm, pm->stack[index]);
+  }
+  for (index = 0; index < pm->overlay_depth; ++index) {
+    if (pm->overlays[index] != NULL && pm->overlays[index]->is_instance)
+      page_refresh_if_marked(pm, pm->overlays[index]);
+  }
+  if (pm->stack_depth > 0)
+    page_do_show(pm->stack[pm->stack_depth - 1]);
+  for (index = 0; index < pm->overlay_depth; ++index)
+    page_do_show(pm->overlays[index]);
 }
 
 /* ---- Public API ---- */

@@ -401,6 +401,12 @@ void pm_page_set_keep_alive(pm_page_t *page, bool enable);
 /** Query whether a page has keep_alive enabled. */
 bool pm_page_get_keep_alive(pm_page_t *page);
 
+/**
+ * Recreate every live page root while preserving stack, overlay and navigation
+ * data. Intended for owner-thread environment changes such as a theme switch.
+ */
+void pm_refresh_pages(pm_t *pm);
+
 #ifdef __cplusplus
 }
 #endif
