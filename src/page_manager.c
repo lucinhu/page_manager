@@ -794,6 +794,44 @@ static void page_refresh_if_marked(pm_t *pm, pm_page_t *page) {
   page_do_create(pm, page);
 }
 
+static void page_resize_root(pm_page_t *page, int width, int height) {
+  if (page == NULL || page->root == NULL)
+    return;
+  lv_obj_set_pos(page->root, 0, 0);
+  lv_obj_set_size(page->root, width, height);
+}
+
+static void pm_display_resolution_changed(lv_event_t *event) {
+  pm_t *pm = (pm_t *)lv_event_get_user_data(event);
+  int width;
+  int height;
+  int index;
+  if (pm == NULL || pm->disp == NULL)
+    return;
+  width = lv_display_get_horizontal_resolution(pm->disp);
+  height = lv_display_get_vertical_resolution(pm->disp);
+  if (width <= 0 || height <= 0 ||
+      (width == pm->disp_w && height == pm->disp_h))
+    return;
+
+  pm_transition_cancel(pm);
+  pm->disp_w = width;
+  pm->disp_h = height;
+  lv_obj_set_size(pm->host, width, height);
+  for (index = 0; index < pm->reg_count; ++index)
+    page_resize_root(pm->registered[index], width, height);
+  for (index = 0; index < pm->stack_depth; ++index) {
+    if (pm->stack[index] != NULL && pm->stack[index]->is_instance)
+      page_resize_root(pm->stack[index], width, height);
+  }
+  for (index = 0; index < pm->overlay_depth; ++index) {
+    if (pm->overlays[index] != NULL && pm->overlays[index]->is_instance)
+      page_resize_root(pm->overlays[index], width, height);
+  }
+  if (pm->stack_depth > 0)
+    page_reset_transition_state(pm->stack[pm->stack_depth - 1]);
+}
+
 void pm_refresh_pages(pm_t *pm) {
   int index;
   if (pm == NULL)
@@ -894,6 +932,9 @@ pm_t *pm_create(lv_display_t *disp) {
     return NULL;
   }
 
+  lv_display_add_event_cb(disp, pm_display_resolution_changed,
+                          LV_EVENT_RESOLUTION_CHANGED, pm);
+
   PM_LOGI(TAG, "Created page manager %dx%d", w, h);
   return pm;
 }
@@ -901,6 +942,11 @@ pm_t *pm_create(lv_display_t *disp) {
 void pm_destroy(pm_t *pm) {
   if (!pm)
     return;
+
+  if (pm->disp != NULL) {
+    lv_display_remove_event_cb_with_user_data(
+        pm->disp, pm_display_resolution_changed, pm);
+  }
 
   if (pm->event_timer) {
     lv_timer_delete(pm->event_timer);
